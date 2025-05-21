@@ -336,7 +336,7 @@ END'''
     keys_and_types = query_job.result()
     logging.info("Created GeminiFlash model")
     logging.info(query)
-    st.success("Procedures and tables created successfully. Start FeedForge in the Run tab above.")
+    # st.success("Procedures and tables created successfully. Start FeedForge in the Run tab above.")
 
 
 
@@ -465,7 +465,7 @@ def create_vertex_connection_if_not_exists(client, project_id, location, connect
         # Check if the connection already exists
         try:
             connection = client.get_connection(name=connection_full_name)
-            st.success(f"Connection '{connection_name}' already exists.")
+            # st.success(f"Connection '{connection_name}' already exists.")
         except NotFound:
             # Define the connection configuration using cloud_resource properties
             connection = bigquery_connection_v1.types.Connection(

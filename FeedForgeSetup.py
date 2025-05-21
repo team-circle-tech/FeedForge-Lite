@@ -57,7 +57,7 @@ if 'active_tab' not in st.session_state:
     st.session_state.active_tab = "Main"
 
 # Create tabs with the active tab set from session state
-tab1, tab2, tab4 = st.tabs(["Setup", "Explanation", "Run"])
+tab1, tab2 = st.tabs(["Setup", "Explanation"])
 
 #Explain what is the point of this tool
 with tab2:
@@ -97,35 +97,35 @@ If you have any questions or feedback do not heistate to contact us at **howdy@t
 
 # Step by step instructions and running
 with tab1:
-    with st.expander("📚 Quick Tutorial", expanded=False):
+    # with st.expander("📚 Quick Tutorial", expanded=False):
 
-        st.write('''
-                ## Step-by-Step Guide - FeedForge
-                ''')
+    #     st.write('''
+    #             ## Step-by-Step Guide - FeedForge
+    #             ''')
     
-        st.write('''
-            ### Generate JSON Config File for GCP API Access:
-            **What this does:** This JSON file is a key that allows applications (like our Streamlit app) to access your BigQuery data on your behalf. It's essential to keep this file secure. By uploading the JSON, you're giving the Streamlit app the credentials it needs to access and process your BigQuery data.
-            1. Go to the Google Cloud Console
-            2. Select the project you want to use.
-            3. Navigate to IAM & Admin > Service accounts.
-            4. Click on Create Service Account and give it a descriptive name.
-            5. Grant appropriate roles. For this app, you will need to assign: 
-                - BigQuery Connection Admin
-                - BigQuery Data Editor
-                - BigQuery Job User
-                - BigQuery User
-                - Vertex AI User
-                - Project IAM Admin (This is needed to create the External Connection in BigQuery, and grant the necessary permissions to the service account to access Vertex AI)
-            6. Click Continue and then Done.
-            7. Now, find the service account you just created in the list, click on the three-dot menu, and select Manage keys.
-            8. Click on Add Key and choose JSON. This will download a JSON file to your computer.
-            9. Upload the file below. 
+    #     st.write('''
+    #         ### Generate JSON Config File for GCP API Access:
+    #         **What this does:** This JSON file is a key that allows applications (like our Streamlit app) to access your BigQuery data on your behalf. It's essential to keep this file secure. By uploading the JSON, you're giving the Streamlit app the credentials it needs to access and process your BigQuery data.
+    #         1. Go to the Google Cloud Console
+    #         2. Select the project you want to use.
+    #         3. Navigate to IAM & Admin > Service accounts.
+    #         4. Click on Create Service Account and give it a descriptive name.
+    #         5. Grant appropriate roles. For this app, you will need to assign: 
+    #             - BigQuery Connection Admin
+    #             - BigQuery Data Editor
+    #             - BigQuery Job User
+    #             - BigQuery User
+    #             - Vertex AI User
+    #             - Project IAM Admin (This is needed to create the External Connection in BigQuery, and grant the necessary permissions to the service account to access Vertex AI)
+    #         6. Click Continue and then Done.
+    #         7. Now, find the service account you just created in the list, click on the three-dot menu, and select Manage keys.
+    #         8. Click on Add Key and choose JSON. This will download a JSON file to your computer.
+    #         9. Upload the file below. 
 
-                ### Other notes:
-                You will need to enable the Vertex AI API and Cloud Resource Manager API in your project in order to use this app. 
-            ''')
-        st.markdown("![Alt Text](https://github.com/team-circle-tech/GA4toBQ/blob/main/gifs/Config_JSON.gif?raw=true)")
+    #             ### Other notes:
+    #             You will need to enable the Vertex AI API and Cloud Resource Manager API in your project in order to use this app. 
+    #         ''')
+    #     st.markdown("![Alt Text](https://github.com/team-circle-tech/GA4toBQ/blob/main/gifs/Config_JSON.gif?raw=true)")
     # Check if initialization has already happened
     if "init" not in st.session_state:
         st.session_state["init"] = False
@@ -146,22 +146,65 @@ with tab1:
 
     # Check for credentials in Streamlit secrets first
     credentials_from_secrets = False
-    if "gcp_service_account" in st.secrets:
+    if "google_credentials" in st.secrets:
         try:
-            service_account_info = st.secrets["gcp_service_account"]
-            os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = "secrets.json"
-            # Write secrets to a temporary file for GCP libraries that require a file path
-            with open("secrets.json", "w") as f:
-                json.dump(service_account_info, f)
-            service_account_email = service_account_info.get('client_email')
-            client = bigquery.Client()
-            credentials = service_account.Credentials.from_service_account_info(service_account_info)
-            st.session_state.credentials = credentials
-            connectionclient = bigquery_connection_v1.ConnectionServiceClient()
-            credentials_from_secrets = True
-            st.success("Using GCP credentials from Streamlit secrets")
+            # Create a temporary file to write credentials
+            import tempfile
+            with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.json') as temp:
+                # Get credentials from secrets
+                service_account_info = dict(st.secrets["google_credentials"])
+                
+                # Format the private key properly if needed
+                if "private_key" in service_account_info:
+                    private_key = service_account_info["private_key"]
+                    # Remove any triple quotes that might be from TOML
+                    private_key = private_key.replace('"""', '')
+                    # Ensure proper line breaks
+                    private_key = private_key.replace('\\n', '\n')
+                    service_account_info["private_key"] = private_key
+                
+                # Write credentials to the temporary file
+                json.dump(service_account_info, temp)
+                temp_file_name = temp.name
+                
+            # st.write(f"Credentials written to temporary file: {temp_file_name}")
+            
+            # Create clients using the file-based approach
+            os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = temp_file_name
+            
+            # Get project ID
+            project_id = service_account_info.get("project_id")
+            if not project_id:
+                st.warning("Project ID not found in credentials")
+                credentials_from_secrets = False
+            else:
+                # Create clients using file-based approach
+                client = bigquery.Client()
+                credentials = service_account.Credentials.from_service_account_file(temp_file_name)
+                
+                # st.write(f"Successfully created BigQuery client for project: {client.project}")
+                
+                # Create connection client
+                connectionclient = bigquery_connection_v1.ConnectionServiceClient(credentials=credentials)
+                
+                # Store in session state
+                st.session_state.credentials = credentials
+                st.session_state.project_id = project_id
+                
+                # Set success flag
+                credentials_from_secrets = True
+                # st.success("Using GCP credentials from Streamlit secrets")
+                
+                # Clean up the temporary file after we're done with it
+                try:
+                    os.unlink(temp_file_name)
+                except:
+                    pass  # Ignore errors when removing the file
+                
         except Exception as e:
             st.warning(f"Failed to use credentials from secrets: {str(e)}")
+            import traceback
+            st.code(traceback.format_exc(), language="python")
             credentials_from_secrets = False
 
     # Fall back to manual upload if secrets aren't available or valid
@@ -229,7 +272,7 @@ with tab1:
         try:
             # Use the multi-region 'us' for the connection name check
             connection = connectionclient.get_connection(name=f"projects/{project_id}/locations/us/connections/{connectionName}")
-            st.success(f"Connection {connectionName} already exists.")
+            # st.success(f"Connection {connectionName} already exists.")
             st.session_state["bq_location"] = "us" # Set BQ location here if connection exists
         except NotFound:
             st.info(f"Connection {connectionName} not found. Creating connection.")
@@ -342,11 +385,7 @@ with tab1:
                     create_BQ_Tables(client, project_id, dataset_id, Table_Name, schema)
 
                 st.session_state["datasetsmade"] = True
-
-            
-
-with tab4:
-    ## This tab is designed for you to be able to preview and run the AI procedures using form fields. 
+ ## This tab is designed for you to be able to preview and run the AI procedures using form fields. 
     tab_names = ["✏️ Content Input", "🎯 Results"]
     sub_tabs = st.tabs(tab_names)
     with sub_tabs[0]:
@@ -1010,7 +1049,6 @@ Here are some examples for reference:""",
     #     # exampledata = st.checkbox('Create Example Data?', value=False)
 
     #     # if exampledata and st.session_state["example_data_loaded"] == False:
-
     #     #         data = pd.read_csv("Cleaned_Product_Feed_Data.csv")
     #     #         with st.spinner("Loading example data into BigQuery. This can take a while..."):
     #     #             ## upsert data into the Examples table in BQ
@@ -1131,3 +1169,8 @@ Here are some examples for reference:""",
             #     download_table(client, dataset_id, "Output")
             #     st.markdown(download_table(client, dataset_id, "Output"), unsafe_allow_html=True)
             
+
+            
+
+
+   
