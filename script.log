@@ -1,0 +1,233 @@
+root - INFO - Created GeminiFlash model
+root - INFO - ["\nCREATE OR REPLACE MODEL \nFeedForgeDataset.GeminiFlash REMOTE WITH CONNECTION `teamcirclefeedforge.us.FeedForgeConnection` OPTIONS(endpoint = 'gemini-2.0-flash-001');\n        "]
+root - INFO - Created GeminiFlash model
+root - INFO - CREATE OR REPLACE FUNCTION FeedForgeDataset.TitlesPrompt(
+  LANGUAGE STRING,
+  EXAMPLES ARRAY<STRUCT<id STRING, properties STRING, title STRING, description STRING>>,
+  PROPERTIES ARRAY<STRING>) AS (
+  CONCAT(
+    """You are a leading digital marketer working for a top retail organisation.
+                                    
+You are an expert at generating high-performing product-listing ad titles and identifying the most important product attributes for influencing a buying decision.
+
+Your tone of voice should be Benefit-focused, while still adhering to the rules below.
+
+Given the input product data below, for each described product generate a title in """,
+    LANGUAGE,
+    """. Adhere to the following rules:
+1) Put each title on a separate output line, in the same order as the input, and prepended with the product's ID.
+2) Don't make this a numbered list or a list with dashes: each title must consist of pure text, without any formatting characters.
+3) Do not prepend your output with a headline announcing what's following.
+4) Each title must list product attributes, should not exceed 20 words warranted by the product data, among them no duplicates.
+5) If there is a named size attribute, prefix its value with the word for "Size" in the requested language and replace long identifiers with their usual abbreviations. (E.g. for English, this means Small, Medium, Large and X-Large are to be replaced by S, M, L and XL, respectively.)
+6) Product attributes should be enumerated with commas, as seen in the examples, but not vertical bars, dashes or parentheses.
+7) Write dimension without spaces, i.e. do not use "10 x 5 cm", but instead "10×5cm".
+
+
+Let's first look at some examples of how to write good titles:""",
+    "Example input product data:", ARRAY_TO_STRING(
+      (SELECT ARRAY_AGG(properties) FROM UNNEST(EXAMPLES)), '', ''),
+    "Example output product titles (adhering to all seven rules):", ARRAY_TO_STRING(
+      (SELECT ARRAY_AGG(CONCAT(id, ': ', title)) FROM UNNEST(EXAMPLES)), '', ''),
+    """Before getting to the actual task at hand, let's remember the rules by looking at some bad examples for titles and how they would be corrected:
+- "ABC's Hamburger; great hamburger for evenings; with 200g meat, ketchup & salad" – this violates rule 3, as it has duplication and makes claims that are not objective attributes, and rule 6, as it uses semicolons instead of commas. Better: "ABC's Hamburger, with 200g meat, ketchup & salad"
+- "Company dishwasher DW45, 50 x 50 x 70 cm, (1231254)" – this violates rule 4, as it mentions a useless ID, and rule 7, as it uses spaces inside the dimensions. Better: "Company dishwasher DW45, 50×50×70cm"
+- "Fast runners' shoes, Xtra-large, beige, vegan leather" – this violates rule 5, as the named size attribute is not prefixed, nor abbreviated. Better: "Fast runners' shoes, Size XL, beige, vegan leather"
+- "Woodpecker – Night-time Bed, 210 x 100cm, birch, reinforced frame" – this violates rule 6, as it separates the brand from the product name with a dash instead of a comma, and rule 7, as it has spaces between the dimensions. Better: "Woodpecker Night-time Bed, 210×100cm, birch, reinforced frame"
+- "Tapy Tape Roll Pink – 500 x 5 cm, 1 St" – this violates rule 6, as it separates the brand from the product name with a dash instead of a comma, and rule 7, as it has spaces between the dimensions. Better: "Tapy Tape Roll, pink, 500×5cm, 1 St"
+
+
+Now let's tackle the actual task at hand:""",
+    "Actual input product data:", ARRAY_TO_STRING(PROPERTIES, '', ''),
+    "Actual output product titles (adhering to all seven rules):"
+    )
+);
+
+
+CREATE OR REPLACE FUNCTION FeedForgeDataset.DescriptionsPrompt(
+  LANGUAGE STRING,
+  EXAMPLES ARRAY<STRUCT<id STRING, properties STRING, title STRING, description STRING>>,
+  PROPERTIES ARRAY<STRING>) AS (
+  CONCAT(
+  """
+
+You are an expert on writing product descriptions for an online ecommerce retailer. The descriptions must highlight the benefits of each product for use in a New Zealand setting. Your tone of voice should be helpful, knowledgeable, and written like a capable, down-to-earth Kiwi mate — not a salesperson.
+
+The product data includes structured fields (title, brand, category, etc.) and an image URL. Use both to understand the product's characteristics and potential applications. However:
+
+⚠️ Do **not** explicitly refer to the image or describe what is seen in the image. Never say things like "the image shows..." or "visible in the image is...". Instead, use visual insights subtly and implicitly, as if you have hands-on product knowledge.
+
+✴️ Do **not** include any text in ALL CAPS. Convert all names and fields into natural, proper casing — sentence case or title case as appropriate.
+
+🚫 If the brand name resembles a business or legal entity (e.g., contains "Ltd", "Limited", "Inc", "(N.Z.)", etc.), remove it entirely from the description. Only keep a brand if it adds useful context for the customer.
+
+Each description must:
+- Be detailed but under 350 words.
+- Be rewritten entirely from the original.
+- Use natural, fluent language (not robotic or repetitive).
+- Be formatted as a single paragraph — no lists or line breaks.
+- Begin with the product ID followed by a colon and a space.
+- Avoid unnecessary adjectives or filler phrases.
+- Include subtle dry wit or a helpful, light tone only when it fits naturally.
+
+Here are some examples for reference:""",
+  "Example input product data:", ARRAY_TO_STRING(
+    (SELECT ARRAY_AGG(properties) FROM UNNEST(EXAMPLES)), '', ''),
+  "Example output product descriptions (in the same order as the input, prepended with the respective ID, but without headline, without empty lines, without indentation, without leading dashes):", ARRAY_TO_STRING(
+    (SELECT ARRAY_AGG(CONCAT(id, ': ', description)) FROM UNNEST(EXAMPLES)), '', ''),
+  "Now let's tackle the actual task at hand:",
+  "Actual input product data (each includes an image URL):", ARRAY_TO_STRING(PROPERTIES, '', ''),
+  "Actual output product descriptions (in the same order as the input, prepended with the respective ID):"
+)
+);
+
+
+CREATE OR REPLACE PROCEDURE `FeedForgeDataset.BatchedUpdateTitles`(ITEMS_PER_PROMPT INT64, LANGUAGE STRING, PARTS INT64, PART INT64, IDS ARRAY<STRING>)
+OPTIONS (strict_mode=false)
+BEGIN
+  DECLARE EXAMPLES ARRAY<STRUCT<id STRING, properties STRING, title STRING, description STRING>> DEFAULT (
+    SELECT ARRAY_AGG(Examples) FROM FeedForgeDataset.Examples
+  );
+  LOOP
+    IF (
+      SELECT COUNT(*) = 0 AND IDS IS NULL
+      FROM FeedForgeDataset.Output
+      WHERE title IS NULL AND tries < 3
+        AND (PARTS IS NULL OR ABS(MOD(FARM_FINGERPRINT(id), PARTS)) = PART)
+    ) THEN LEAVE;
+    END IF;
+
+    -- Generate prompts
+    CREATE OR REPLACE TEMP TABLE Prompts AS
+    WITH
+      Input AS (
+        SELECT id, TO_JSON_STRING(I) AS properties
+        FROM FeedForgeDataset.Output AS O
+        INNER JOIN FeedForgeDataset.InputProcessing AS I USING (id)
+        WHERE (PARTS IS NULL OR ABS(MOD(FARM_FINGERPRINT(id), PARTS)) = PART)
+          AND IF(IDS IS NOT NULL,
+            O.id IN UNNEST(IDS),
+            O.title IS NULL AND O.tries < 3)
+        ORDER BY RAND()
+        LIMIT 600 -- TODO: Find out how to use a parameter ITEMS_PER_ITERATION here.
+      ),
+      Numbered AS (
+        SELECT id, properties, ROW_NUMBER() OVER (ORDER BY id) - 1 AS row_id
+        FROM Input
+      )
+    SELECT
+      DIV(row_id, ITEMS_PER_PROMPT) AS chunk_id,
+      FeedForgeDataset.TitlesPrompt(LANGUAGE, EXAMPLES, ARRAY_AGG(properties ORDER BY id)) AS prompt,
+      ARRAY_AGG(id ORDER BY id) AS ids
+    FROM Numbered
+    GROUP BY 1;
+
+    -- Generate titles
+    CREATE OR REPLACE TEMP TABLE Generated AS
+    SELECT ids, COALESCE(SPLIT(ml_generate_text_llm_result, '\n'), ids) AS output,
+    FROM
+      ML.GENERATE_TEXT(
+        MODEL FeedForgeDataset.GeminiFlash,
+        TABLE Prompts,
+        STRUCT(
+          0.1 AS temperature,
+          2048 AS max_output_tokens,
+          TRUE AS flatten_json_output));
+
+    -- Store generated titles in output feed
+    MERGE FeedForgeDataset.Output AS O
+    USING (
+      SELECT
+        COALESCE(REGEXP_EXTRACT(output, r'^([^:]+): .*'), REGEXP_EXTRACT(output, r'^([^:]+)$')) AS id,
+        REGEXP_EXTRACT(output, r'^[^:]+: (.*)$') AS title
+      FROM Generated AS G
+      CROSS JOIN G.output
+      QUALIFY ROW_NUMBER() OVER (PARTITION BY id) = 1 AND id IN UNNEST(G.ids)
+    ) AS G
+      ON O.id = G.id
+    WHEN MATCHED THEN UPDATE SET
+      O.title = IFNULL(G.title, O.title),
+      O.tries = O.tries + 1;
+
+
+    IF IDS IS NOT NULL THEN LEAVE;
+    END IF;
+  END LOOP;
+END;
+
+CREATE OR REPLACE PROCEDURE `FeedForgeDataset.BatchedUpdateDescriptions`(ITEMS_PER_PROMPT INT64, LANGUAGE STRING, PARTS INT64, PART INT64, IDS ARRAY<STRING>)
+OPTIONS (strict_mode=false)
+BEGIN
+  DECLARE EXAMPLES ARRAY<STRUCT<id STRING, properties STRING, title STRING, description STRING>> DEFAULT (
+    SELECT ARRAY_AGG(Examples) FROM FeedForgeDataset.Examples
+  );
+  LOOP
+    IF (
+      SELECT COUNT(*) = 0 AND IDS IS NULL
+      FROM FeedForgeDataset.Output
+      WHERE description IS NULL AND tries < 3
+        AND (PARTS IS NULL OR ABS(MOD(FARM_FINGERPRINT(id), PARTS)) = PART)
+    ) THEN LEAVE;
+    END IF;
+
+    -- Generate prompts
+    CREATE OR REPLACE TEMP TABLE Prompts AS
+    WITH
+      Input AS (
+        SELECT id, TO_JSON_STRING(I) AS properties
+        FROM FeedForgeDataset.Output AS O
+        INNER JOIN FeedForgeDataset.InputProcessing AS I USING (id)
+        WHERE (PARTS IS NULL OR ABS(MOD(FARM_FINGERPRINT(id), PARTS)) = PART)
+          AND IF(IDS IS NOT NULL,
+            O.id IN UNNEST(IDS),
+            O.description IS NULL AND O.tries < 3)
+        ORDER BY RAND()
+        LIMIT 600 -- TODO: Find out how to use a parameter ITEMS_PER_ITERATION here.
+      ),
+      Numbered AS (
+        SELECT id, properties, ROW_NUMBER() OVER (ORDER BY id) - 1 AS row_id
+        FROM Input
+      )
+    SELECT
+      DIV(row_id, ITEMS_PER_PROMPT) AS chunk_id,
+      FeedForgeDataset.DescriptionsPrompt(LANGUAGE, EXAMPLES, ARRAY_AGG(properties ORDER BY id)) AS prompt,
+      ARRAY_AGG(id ORDER BY id) AS ids
+    FROM Numbered
+    GROUP BY 1;
+
+    -- Generate descriptions
+    CREATE OR REPLACE TEMP TABLE Generated AS
+    SELECT ids, COALESCE(SPLIT(ml_generate_text_llm_result, '\n'), ids) AS output,
+    FROM
+      ML.GENERATE_TEXT(
+        MODEL FeedForgeDataset.GeminiFlash,
+        TABLE Prompts,
+        STRUCT(
+          0.1 AS temperature,
+          2048 AS max_output_tokens,
+          TRUE AS flatten_json_output));
+
+    -- Store generated descriptions in output feed
+    MERGE FeedForgeDataset.Output AS O
+    USING (
+      SELECT
+        COALESCE(REGEXP_EXTRACT(output, r'^([^:]+): .*'), REGEXP_EXTRACT(output, r'^([^:]+)$')) AS id,
+        REGEXP_EXTRACT(output, r'^[^:]+: (.*)$') AS description
+      FROM Generated AS G
+      CROSS JOIN G.output
+      QUALIFY ROW_NUMBER() OVER (PARTITION BY id) = 1 AND id IN UNNEST(G.ids)
+    ) AS G
+      ON O.id = G.id
+    WHEN MATCHED THEN UPDATE SET
+      O.description = IFNULL(G.description, O.description),
+      O.tries = O.tries + 1;
+
+    IF IDS IS NOT NULL THEN LEAVE;
+    END IF;
+  END LOOP;
+END
+root - INFO - Table InputRaw created successfully.
+root - INFO - Table InputFiltered created successfully.
+root - INFO - Table InputProcessing created successfully.
+root - INFO - Table Output created successfully.
+root - INFO - Table Examples created successfully.

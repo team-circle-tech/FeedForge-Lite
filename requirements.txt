@@ -1,0 +1,17 @@
+streamlit
+pandas
+google-cloud-bigquery
+google-cloud-bigquery-connection
+google-api-core
+google-auth
+google-auth-oauthlib
+google-cloud-storage
+google-oauth
+vertexai
+requests
+Pillow
+google-cloud
+google-cloud-resource-manager
+vertexai
+google-cloud-aiplatform
+db-dtypes
