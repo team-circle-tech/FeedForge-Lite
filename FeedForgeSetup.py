@@ -50,7 +50,7 @@ CONFIG = {
 # Streamlit Layout
 ##############################################################################################################################################
 st.set_page_config(layout="wide", page_icon=":unlock:", page_title="FeedForge App")
-st.title("FeedForge 🛠️ A.I. Powered Feeds Made Easy")
+st.title("FeedForge 🛠️ A.I Powered Feeds Made Easy")
 
 # Initialize active_tab in session state if it doesn't exist
 if 'active_tab' not in st.session_state:
